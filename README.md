@@ -42,7 +42,7 @@ The dataset contains sales information for products across BigMart outlets.
 * **Matplotlib & Seaborn** — data visualization
 * **Scikit-learn** — preprocessing, model training and evaluation
 * **XGBoost** — gradient boosting regression
-* **Joblib/Pickle** — model persistence
+* **Joblib** — model persistence
 * **Streamlit** — interactive prediction application
 * **Jupyter Notebook** — analysis and experimentation
 
@@ -139,14 +139,14 @@ streamlit run app.py
 ## Project Structure
 
 ```text
-BigMart-Sales-Intelligence/
+BigMart-Sales-Intelligence-Prediction/
 │
 ├── data/
 │   ├── train.csv
 │   └── test.csv
 │
 ├── notebook/
-│   └── BigMart_Sales_Intelligence_Prediction.ipynb
+│   └── Amlan Sarkar_BigMart Sales Intelligence Prediction.ipynb
 │
 ├── models/
 │   ├── rf_model.pkl
@@ -167,7 +167,7 @@ Clone the repository:
 
 ```bash
 git clone <repository-url>
-cd BigMart-Sales-Intelligence
+cd BigMart-Sales-Intelligence-Prediction
 ```
 
 Install the required dependencies:
@@ -185,7 +185,7 @@ jupyter notebook
 Open:
 
 ```text
-notebook/BigMart_Sales_Intelligence_Prediction.ipynb
+notebook/Amlan Sarkar_BigMart Sales Intelligence Prediction.ipynb
 ```
 
 ## Run the Streamlit App
