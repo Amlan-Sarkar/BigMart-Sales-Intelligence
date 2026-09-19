@@ -139,7 +139,7 @@ streamlit run app.py
 ## Project Structure
 
 ```text
-BigMart-Sales-Intelligence-Prediction/
+BigMart-Sales-Intelligence/
 │
 ├── data/
 │   ├── train.csv
@@ -167,7 +167,7 @@ Clone the repository:
 
 ```bash
 git clone <repository-url>
-cd BigMart-Sales-Intelligence-Prediction
+cd BigMart-Sales-Intelligence
 ```
 
 Install the required dependencies:
