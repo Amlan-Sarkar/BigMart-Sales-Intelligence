@@ -65,10 +65,11 @@ BigMart operates multiple retail outlets selling thousands of products. Sales va
 │   ├── feature_importance.csv
 │   └── test_results.csv
 ├── notebook/
-│   └── Amlan_Sarkar_BigMart_Improved_Notebook.ipynb
-├── app.py                   # Streamlit application
-├── requirements.txt
-└── README.md
+│   └── Amlan Sarkar_BigMart Sales Intelligence Prediction.ipynb
+├── LICENSE                  
+├── README.md
+├── app.py                  # Streamlit application
+└── requirements.txt
 ```
 
 ---
@@ -96,7 +97,7 @@ pip install -r requirements.txt
 
 ### 1. Notebook (training & analysis)
 
-Open `notebook/Amlan_Sarkar_BigMart_Improved_Notebook.ipynb` in Jupyter / VS Code / Cursor and run all cells.
+Open `notebook/Amlan Sarkar_BigMart Sales Intelligence Prediction.ipynb` in Jupyter / VS Code / Cursor and run all cells.
 
 This will:
 
@@ -147,6 +148,6 @@ See `requirements.txt` for the full list. Main packages:
 
 ---
 
-## License / Data
+## Data
 
 Dataset is publicly available on Kaggle. This project is for educational / portfolio purposes.
