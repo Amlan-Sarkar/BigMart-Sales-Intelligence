@@ -42,8 +42,9 @@ BigMart operates multiple retail outlets selling thousands of products. Sales va
 
 ## Key Findings
 
-- **Item MRP** is the strongest driver of sales
-- **Outlet Type** is the second strongest driver
+- **Outlet Type** is the strongest driver of sales
+- **MRP Segment** is the second strongest driver
+- **Item MRP** is the third strongest driver
 - Tree-based models clearly outperform a simple mean baseline
 - The model is more reliable for known products; for brand-new products combine the prediction with baseline / expert judgment
 
