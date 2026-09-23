@@ -32,7 +32,7 @@ st.markdown("""
 # ============================================================================
 @st.cache_resource
 def load_artifacts():
-    """Load model, encoders, features, and metrics from pickle files."""
+    """Load model, encoders, features, metrics, and feature bins from pickle files."""
     models_dir = Path(__file__).parent / "models"
 
     try:
@@ -46,27 +46,106 @@ def load_artifacts():
             features = pickle.load(f)
 
         with open(models_dir / "metrics.pkl", "rb") as f:
-            metrics = pickle.load(f)
+            metrics_data = pickle.load(f)
 
-        return model, encoders, features, metrics
+        with open(models_dir / "feature_bins.pkl", "rb") as f:
+            feature_bins = pickle.load(f)
+
+        # Support the new metrics.pkl structure:
+        # {
+        #     "holdout": {...},
+        #     "grouped_cv": {...}
+        # }
+        metrics = metrics_data["holdout"]
+        grouped_cv_metrics = metrics_data["grouped_cv"]
+
+        return model, encoders, features, metrics, grouped_cv_metrics, feature_bins
 
     except FileNotFoundError as e:
         st.error(f"❌ Error loading artifacts: {e}")
-        st.warning("Ensure these files exist in the `models/` folder:\n"
-                   "- best_model.pkl\n- label_encoders.pkl\n"
-                   "- feature_names.pkl\n- metrics.pkl")
+        st.warning(
+            "Ensure these files exist in the `models/` folder:\n"
+            "- best_model.pkl\n"
+            "- label_encoders.pkl\n"
+            "- feature_names.pkl\n"
+            "- metrics.pkl\n"
+            "- feature_bins.pkl"
+        )
+        st.stop()
+    except (pickle.UnpicklingError, KeyError, EOFError, AttributeError, ModuleNotFoundError) as e:
+        # Covers a stale/corrupt pickle, a metrics.pkl missing the expected
+        # "holdout"/"grouped_cv" keys, or a scikit-learn/library version
+        # mismatch between the environment that trained the model and the
+        # one serving it (a common cause of unpicklable model objects).
+        st.error(f"❌ Could not load model artifacts: {e}")
+        st.warning(
+            "This usually means the files in `models/` were produced by a "
+            "different version of the notebook/environment than the one "
+            "running this app, or a file is corrupted. Re-run the "
+            "notebook's deployment cell (Section 13) with matching "
+            "package versions and retry."
+        )
         st.stop()
 
 
-model, label_encoders, FEATURES, metrics_dict = load_artifacts()
+@st.cache_data
+def load_feature_importance():
+    """Load feature importance table, sorted descending by importance."""
+    imp_path = Path(__file__).parent / "models" / "feature_importance.csv"
+    df = pd.read_csv(imp_path)
 
-# Find best model name (exclude Baseline)
-best_model_name = max(
-    (k for k in metrics_dict if k != "Baseline"),
-    key=lambda k: metrics_dict[k]["R2"]
-)
-best_metrics = metrics_dict[best_model_name]
+    required_columns = {"Feature", "Importance"}
+
+    if not required_columns.issubset(df.columns):
+        missing = required_columns - set(df.columns)
+        raise ValueError(
+            f"feature_importance.csv is missing required column(s): "
+            f"{', '.join(sorted(missing))}"
+        )
+
+    df = df.set_index("Feature")
+    return df.sort_values("Importance", ascending=False)
+
+
+model, label_encoders, FEATURES, metrics_dict, grouped_cv_metrics, feature_bins = load_artifacts()
+
+try:
+    importance_df_desc = load_feature_importance()
+    top3_features = importance_df_desc.head(3)
+except (FileNotFoundError, ValueError, pd.errors.ParserError, pd.errors.EmptyDataError):
+    importance_df_desc = None
+    top3_features = None
+
+if importance_df_desc is None:
+    st.warning(
+        "⚠️ Feature importance data is unavailable or has an invalid format."
+    )
+
+
+# Find best model name — by GROUPED-CV R², not holdout R².
+#
+# The holdout split in the notebook is a plain random 80/20 split, so the
+# same product can appear in both halves; a model can partly "memorize"
+# a product's typical sales through correlated features, which inflates
+# holdout R². Grouped-CV (grouped by product) is the honest estimate of
+# how the model will do on a product it has never seen — the scenario
+# this app is actually used for — so that's what selects the model shown.
+candidate_names = [k for k in grouped_cv_metrics if k != "Baseline"]
+
+if not candidate_names:
+    st.error(
+        "❌ No candidate models found in the saved Grouped-CV metrics. "
+        "Re-run the notebook's Cross-Validation section (Section 9) and "
+        "the deployment cell (Section 13)."
+    )
+    st.stop()
+
+best_model_name = max(candidate_names, key=lambda k: grouped_cv_metrics[k]["R2"])
+
+cv_metrics = grouped_cv_metrics[best_model_name]
+holdout_metrics = metrics_dict.get(best_model_name, cv_metrics)
 baseline_metrics = metrics_dict.get("Baseline", {})
+error_quantiles = metrics_dict.get("error_quantiles")
 
 # ============================================================================
 # HEADER
@@ -74,6 +153,23 @@ baseline_metrics = metrics_dict.get("Baseline", {})
 st.title("🏬 BigMart Sales Intelligence Predictor")
 st.markdown("**Predict item-outlet sales using the trained machine learning model**")
 st.divider()
+
+def warn_if_outside_training_range(value, range_key, label):
+    """Flag when an input is outside the range the model was actually
+    trained on. The model can still produce a number outside this range,
+    but it's extrapolating rather than interpolating, so accuracy is less
+    trustworthy there. No-op if this feature_bins.pkl predates the fix
+    that started saving these ranges."""
+    training_range = feature_bins.get(range_key)
+    if not training_range:
+        return
+    lo, hi = training_range
+    if value < lo or value > hi:
+        st.caption(
+            f"⚠️ {label} = {value:g} is outside the training range "
+            f"[{lo:g}, {hi:g}] — the model is extrapolating here."
+        )
+
 
 tab1, tab2, tab3 = st.tabs(["💡 Make Prediction", "📊 Model Performance", "ℹ️ About"])
 
@@ -93,40 +189,40 @@ with tab1:
             min_value=0.0, max_value=50.0, value=12.65, step=0.1,
             help="Weight of the product in kilograms"
         )
+        warn_if_outside_training_range(item_weight, "item_weight_range", "Item Weight")
 
         item_visibility = st.slider(
             "Item Visibility",
             min_value=0.0, max_value=0.35, value=0.07, step=0.01,
             help="% of total display area allocated to the product (0 = back-stocked)"
         )
+        warn_if_outside_training_range(item_visibility, "item_visibility_range", "Item Visibility")
 
-        has_visibility = st.selectbox(
-            "Has Shelf Visibility?",
-            options=[1, 0],
-            format_func=lambda x: "Yes" if x == 1 else "No (back-stocked)",
-            help="Whether the item has any shelf visibility"
-        )
+        # Automatically derive Has_Visibility from Item Visibility
+        has_visibility = int(item_visibility > 0)
+
+        st.caption(
+            f"Has Shelf Visibility: **{'Yes' if has_visibility else 'No (back-stocked)'}**"
+     )
 
         item_mrp = st.number_input(
             "Item MRP (₹)",
-            min_value=0.0, max_value=300.0, value=150.0, step=1.0,
+            min_value=0.0, max_value=270.0, value=150.0, step=1.0,
             help="Maximum Retail Price in Indian Rupees"
         )
+        warn_if_outside_training_range(item_mrp, "item_mrp_range", "Item MRP")
 
-        # Auto-derive MRP_Segment from MRP for convenience
-        if item_mrp <= 70:
-            default_mrp_seg = "Budget"
-        elif item_mrp <= 140:
-            default_mrp_seg = "MidRange"
-        else:
-            default_mrp_seg = "Premium"
+        # Auto-derive MRP_Segment using saved feature bin definitions
+        mrp_segment = pd.cut(
+            [item_mrp],
+            bins=feature_bins["mrp_bins"],
+            labels=feature_bins["mrp_labels"],
+            include_lowest=True
+        )[0]
 
-        mrp_segment = st.selectbox(
-            "MRP Segment",
-            options=["Budget", "MidRange", "Premium"],
-            index=["Budget", "MidRange", "Premium"].index(default_mrp_seg),
-            help="Price segment (auto-suggested from MRP)"
-        )
+        mrp_segment = str(mrp_segment)
+
+        st.caption(f"MRP Segment: **{mrp_segment}**")
 
         item_fat_content = st.selectbox(
             "Item Fat Content",
@@ -148,21 +244,19 @@ with tab1:
             min_value=0, max_value=30, value=15, step=1,
             help="Years since establishment (reference year 2013)"
         )
+        warn_if_outside_training_range(outlet_age, "outlet_age_range", "Outlet Age")
 
-        # Auto-derive Outlet_Age_Group
-        if outlet_age <= 5:
-            default_age_grp = "New"
-        elif outlet_age <= 10:
-            default_age_grp = "Mature"
-        else:
-            default_age_grp = "Established"
+        # Auto-derive Outlet_Age_Group using saved feature bin definitions
+        outlet_age_group = pd.cut(
+            [outlet_age],
+            bins=feature_bins["age_bins"],
+            labels=feature_bins["age_labels"],
+            include_lowest=True
+        )[0]
 
-        outlet_age_group = st.selectbox(
-            "Outlet Age Group",
-            options=["New", "Mature", "Established"],
-            index=["New", "Mature", "Established"].index(default_age_grp),
-            help="Age segment of the outlet"
-        )
+        outlet_age_group = str(outlet_age_group)
+
+        st.caption(f"Outlet Age Group: **{outlet_age_group}**")
 
         outlet_size = st.selectbox(
             "Outlet Size",
@@ -227,11 +321,15 @@ with tab1:
             with m1:
                 st.metric("Predicted Sales", f"₹{prediction:,.2f}")
             with m2:
-                st.metric("Model R²", f"{best_metrics['R2']:.1%}",
-                          help="Variance explained by the model")
+                st.metric("Model R² (unseen products)", f"{cv_metrics['R2']:.1%}",
+                          help="Grouped 5-fold CV, grouped by product — variance "
+                               "explained when the model has never seen this "
+                               "product before. This is the more honest number "
+                               "for a brand-new product; see the Model "
+                               "Performance tab for the (higher) holdout figure.")
             with m3:
-                st.metric("Typical Error (MAE)", f"±₹{best_metrics['MAE']:,.0f}",
-                          help="Average absolute error on validation data")
+                st.metric("Typical Error, unseen products (MAE)", f"±₹{cv_metrics['MAE']:,.0f}",
+                          help="Average absolute error, grouped cross-validation.")
 
             st.markdown("### 📋 Input Summary")
             st.dataframe(
@@ -241,12 +339,27 @@ with tab1:
             )
 
             st.markdown("### 💭 Interpretation")
-            low = max(0, prediction - best_metrics["MAE"])
-            high = prediction + best_metrics["MAE"]
+            if error_quantiles is not None:
+                # Empirical 80% interval from the actual holdout residual
+                # distribution, rather than a symmetric +/-MAE band. Sales
+                # are right-skewed, so the true error spread is not
+                # symmetric around the prediction — this interval reflects
+                # that, at the cost of still being holdout-sample-sized
+                # (i.e. approximate, not a formal statistical guarantee).
+                low = max(0, prediction + error_quantiles["p10"])
+                high = prediction + error_quantiles["p90"]
+                interval_note = "an empirical 80% interval from holdout prediction errors"
+            else:
+                # Fallback for a metrics.pkl saved before this interval fix existed.
+                low = max(0, prediction - cv_metrics["MAE"])
+                high = prediction + cv_metrics["MAE"]
+                interval_note = "a rough ±MAE band (re-run the notebook's deployment cell for a better-calibrated interval)"
+
             st.info(
                 f"Predicted sales for this product-outlet combination: **₹{prediction:,.0f}**.  \n"
-                f"Given the model's typical error (±₹{best_metrics['MAE']:,.0f}), "
-                f"expect sales roughly between **₹{low:,.0f}** and **₹{high:,.0f}**."
+                f"Based on {interval_note}, "
+                f"expect sales roughly between **₹{low:,.0f}** and **₹{high:,.0f}**. "
+                f"This is an approximate range, not a formal confidence interval."
             )
 
         except Exception as e:
@@ -266,42 +379,107 @@ with tab2:
             "RMSE (₹)": f"{m['RMSE']:,.2f}",
             "R² Score": f"{m['R2']:.4f}"
         })
-    st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
+
+    st.dataframe(
+        pd.DataFrame(metrics_rows),
+        use_container_width=True,
+        hide_index=True
+    )
 
     st.divider()
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Best Model", best_model_name, f"R² = {best_metrics['R2']:.4f}")
-    with c2:
-        st.metric("Variance Explained", f"{best_metrics['R2']:.1%}")
-    with c3:
-        improvement = best_metrics["R2"] - baseline_metrics.get("R2", 0)
-        st.metric("Improvement over Baseline", f"+{improvement:.1%}")
+    st.caption(
+        f"**{best_model_name}** was selected by grouped-CV R² "
+        "(generalization to unseen products), not by the holdout R² below — "
+        "see the Grouped Cross-Validation section for why."
+    )
 
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.metric(
+            "Best Model",
+            best_model_name,
+            f"Holdout R² = {holdout_metrics['R2']:.4f}"
+        )
+
+    with c2:
+        st.metric(
+            "Variance Explained (holdout)",
+            f"{holdout_metrics['R2']:.1%}"
+        )
+
+    with c3:
+        improvement = holdout_metrics["R2"] - baseline_metrics.get("R2", 0)
+        st.metric(
+            "Improvement over Baseline (holdout)",
+            f"+{improvement:.1%}"
+        )
+
+    # ========================================================================
+    # CROSS-VALIDATION
+    # ========================================================================
+    st.divider()
+
+    st.subheader("Cross-Validation")
+
+    st.caption(
+        f"5-Fold Grouped Cross-Validation — grouped by Product ({best_model_name}). "
+        "This is the metric that decided which model is deployed above, because it "
+        "holds out whole products rather than individual rows — a plain random "
+        "80/20 split can leak a product's other outlet-records into both sides."
+    )
+
+    cv1, cv2, cv3 = st.columns(3)
+
+    with cv1:
+        st.metric(
+            "R²",
+            f"{cv_metrics['R2']:.4f}"
+        )
+
+    with cv2:
+        st.metric(
+            "MAE",
+            f"₹{cv_metrics['MAE']:,.0f}"
+        )
+
+    with cv3:
+        st.metric(
+            "RMSE",
+            f"₹{cv_metrics['RMSE']:,.0f}"
+        )
+
+    st.caption(
+        "Each fold holds out complete products, measuring generalization to unseen products. "
+        "Note this R² is typically lower than the holdout R² above — that's expected, and is "
+        "the more trustworthy number for predicting a brand-new product."
+    )
+
+    # ========================================================================
+    # FEATURE IMPORTANCE
+    # ========================================================================
     st.divider()
 
     st.subheader(f"Feature Importance ({best_model_name})")
 
-    try:
-        imp_path = Path(__file__).parent / "models" / "feature_importance.csv"
-        importance_df = pd.read_csv(imp_path)
-
-        # Use Feature column as labels
-        if "Feature" in importance_df.columns:
-            importance_df = importance_df.set_index("Feature")
-
-        importance_df = importance_df.sort_values("Importance", ascending=True)
-
-        st.bar_chart(importance_df["Importance"], height=400)
+    if importance_df_desc is not None:
+        st.bar_chart(
+            importance_df_desc["Importance"].sort_values(ascending=True),
+            height=400
+        )
 
         st.markdown("**Top contributors:**")
-        top3 = importance_df.sort_values("Importance", ascending=False).head(3)
-        for i, (feat, row) in enumerate(top3.iterrows(), 1):
-            st.write(f"{i}. **{feat}** — {row['Importance']*100:.1f}%")
 
-    except FileNotFoundError:
-        st.warning("⚠️ feature_importance.csv not found in models/")
+        for i, (feat, row) in enumerate(top3_features.iterrows(), 1):
+            st.write(
+                f"{i}. **{feat}** — {row['Importance'] * 100:.1f}%"
+            )
+
+    else:
+        st.warning(
+            "⚠️ feature_importance.csv not found in models/"
+        )
 
 # ============================================================================
 # TAB 3: ABOUT
@@ -328,15 +506,22 @@ with tab3:
     - **Evaluation:** Hold-out validation + 5-Fold GroupKFold (by product)
 
     #### Current Performance
+    *(Grouped 5-fold CV — estimated performance on products the model has never seen)*
     """)
 
     m1, m2, m3 = st.columns(3)
     with m1:
-        st.metric("MAE", f"₹{best_metrics['MAE']:,.2f}")
+        st.metric("MAE", f"₹{cv_metrics['MAE']:,.2f}")
     with m2:
-        st.metric("RMSE", f"₹{best_metrics['RMSE']:,.2f}")
+        st.metric("RMSE", f"₹{cv_metrics['RMSE']:,.2f}")
     with m3:
-        st.metric("R²", f"{best_metrics['R2']:.4f}")
+        st.metric("R²", f"{cv_metrics['R2']:.4f}")
+
+    st.caption(
+        f"Holdout validation (products may repeat across train/test): "
+        f"MAE ₹{holdout_metrics['MAE']:,.2f}, R² {holdout_metrics['R2']:.4f} — "
+        "see the Model Performance tab for the full comparison."
+    )
 
     st.markdown("""
     #### Features Used
@@ -349,8 +534,16 @@ with tab3:
     - Outlet Type, Outlet Size, Outlet Location Type
 
     #### Key Business Insights
-    - **Item MRP** is the strongest driver of sales  
-    - **Outlet Type** is the second strongest driver  
+    """)
+
+    if top3_features is not None:
+        rank_labels = ["strongest", "second strongest", "third strongest"]
+        for (feat, row), label in zip(top3_features.iterrows(), rank_labels):
+            st.markdown(f"- **{feat}** is the {label} driver of sales")
+    else:
+        st.markdown("- Feature importance data unavailable (feature_importance.csv not found)")
+
+    st.markdown("""
     - Model is more reliable for known products; for brand-new products combine  
       the prediction with baseline / expert judgment  
 
