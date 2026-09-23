@@ -20,7 +20,7 @@ BigMart operates multiple retail outlets selling thousands of products. Sales va
 
 | Item | Details |
 |------|---------|
-| Source | [Kaggle – BigMart Sales Data](https://www.kaggle.com/brijbhushannanda1979/bigmart-sales-data) |
+| Dataset Link | [Kaggle – BigMart Sales Data](https://www.kaggle.com/brijbhushannanda1979/bigmart-sales-data) |
 | Training records | 8,523 |
 | Products | 1,559 unique items |
 | Outlets | 10 stores |
