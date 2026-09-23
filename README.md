@@ -65,7 +65,7 @@ BigMart operates multiple retail outlets selling thousands of products. Sales va
 
 ---
 
-## Screenshots
+## Dashboard Screenshots
 
 ### Make Prediction
 
