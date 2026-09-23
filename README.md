@@ -193,6 +193,6 @@ See `requirements.txt` for the full list. Main packages:
 
 ---
 
-## Data
+## License
 
-Dataset is publicly available on Kaggle. This project is for educational / portfolio purposes.
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
